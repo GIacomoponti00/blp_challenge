@@ -84,8 +84,7 @@ python src/web_app.py --db procurements.db
 Open <http://127.0.0.1:8000>. The mock ERP is available at
 <http://127.0.0.1:8080/purchase-orders>.
 
-Requisition 1 is a useful clean-path demonstration. Its approval route contains
-two sequential approvers. After both approvals, the UI enables the purchase
+After both approvals, the UI enables the purchase
 order action and records the ERP-assigned PO number.
 
 ## Build a fresh database from the supplied files
@@ -109,7 +108,7 @@ conda deactivate
 conda activate blp-procurement
 ```
 
-Never commit the API key. `OPENAI_MODEL` can optionally override the default
+`OPENAI_MODEL` can optionally override the default
 model used by `src/llm_extraction.py`.
 
 ### 2. Ingest all emails and referenced PDFs
@@ -288,12 +287,7 @@ policy, access controls, and an appropriate provider data-retention setting.
   durable workers, per-requisition locking, migrations, structured PII-safe
   observability, and encrypted attachment retention would be appropriate.
 
-## Suggested 5–10 minute walkthrough
+## Walkthrough
 
-1. Show the architecture above and the SQLite tables.
-2. Open requisition 1 and explain its normalized values and approval route.
-3. Approve the two sequential steps and create a PO in the mock ERP.
-4. Open a messy request and demonstrate validation, a clerk edit, or duplicate
-   evidence.
-5. Show the LLM prompt/schema and explain how nonsense output is sent to review.
-6. Close with the known limitations and production follow-ups.
+Here you can find a quick walkthrough of the code: 
+https://www.loom.com/share/60c3f482e40a4877b6aef3c1b6409ba2
