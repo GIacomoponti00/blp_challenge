@@ -1,0 +1,10 @@
+# Subproblem 1: email parsing and text-PDF extraction
+pypdf==6.10.0
+
+# Subproblem 3: schema-constrained LLM extraction
+openai==3.1.0
+pydantic==2.13.4
+
+# Subproblems 4-9 use only Python's standard library (sqlite3, decimal,
+# urllib, http.server, email, and unittest), so no additional packages are
+# required in the same conda environment.
