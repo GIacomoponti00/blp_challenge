@@ -3,14 +3,16 @@
 
 This is the ingestion boundary for the purchase-requisition challenge. It does
 not call an LLM, match master data, calculate totals, or make workflow decisions.
-Its job is to turn untrusted source files into a provenance-rich JSON packet.
+Its job is to turn untrusted source files into provenance-rich records and store
+one record per email in SQLite. JSON export remains available for debugging.
 
 Dependencies:
     python -m pip install -r requirements.txt
 
 Examples:
     python subproblem1_ingestion.py email.eml --sidecar-dir quotes
-    python subproblem1_ingestion.py emails --sidecar-dir quotes -o parsed.json
+    python subproblem1_ingestion.py emails --sidecar-dir quotes --db procurement.db
+    python subproblem1_ingestion.py emails --sidecar-dir quotes -o parsed-export.json
 
 The optional sidecar directory supports the challenge fixture that writes
 "[Attachment: quote.pdf]" in the body instead of embedding the PDF as MIME.
@@ -35,8 +37,19 @@ from email.utils import getaddresses, parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterable
-import sqlite3
-from datetime import datetime, timezone
+
+try:  # Support both `python outputs/script.py` and package-style imports.
+    from .procurement_storage import (
+        DEFAULT_DB_PATH,
+        StorageError,
+        upsert_ingested_records,
+    )
+except ImportError:
+    from procurement_storage import (
+        DEFAULT_DB_PATH,
+        StorageError,
+        upsert_ingested_records,
+    )
 
 try:
     from pypdf import PdfReader
@@ -649,99 +662,6 @@ def atomic_write_text(path: Path, value: str) -> None:
     os.replace(temporary, path)
 
 
-def initialize_database(connection: sqlite3.Connection) -> None:
-    connection.execute("""
-        CREATE TABLE IF NOT EXISTS source_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-            original_filename TEXT NOT NULL,
-            source_sha256 TEXT NOT NULL UNIQUE,
-
-            message_id TEXT,
-            received_at TEXT,
-            subject TEXT,
-            sender_name TEXT,
-            sender_email TEXT,
-
-            ingestion_schema_version INTEGER NOT NULL,
-            ingestion_payload TEXT NOT NULL,
-
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    connection.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_source_messages_message_id
-        ON source_messages(message_id)
-        WHERE message_id IS NOT NULL
-    """)
-    
-def save_ingestion_record(
-    connection: sqlite3.Connection,
-    record: dict[str, Any],
-) -> bool:
-    source = record["source"]
-    headers = record["headers"]
-
-    sender = headers["from"][0] if headers["from"] else {}
-
-    payload = json.dumps(
-        record,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-    cursor = connection.execute(
-        """
-        INSERT INTO source_messages (
-            original_filename,
-            source_sha256,
-            message_id,
-            received_at,
-            subject,
-            sender_name,
-            sender_email,
-            ingestion_schema_version,
-            ingestion_payload,
-            created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source_sha256) DO NOTHING
-        """,
-        (
-            source["filename"],
-            source["sha256"],
-            headers["message_id"],
-            headers["date_utc"],
-            headers["subject"],
-            sender.get("display_name"),
-            sender.get("address"),
-            record["schema_version"],
-            payload,
-            datetime.now(timezone.utc).isoformat(),
-        ),
-    )
-
-    return cursor.rowcount == 1
-
-def load_ingestion_record(
-    connection: sqlite3.Connection,
-    source_message_id: int,
-) -> dict[str, Any] | None:
-    row = connection.execute(
-        """
-        SELECT ingestion_payload
-        FROM source_messages
-        WHERE id = ?
-        """,
-        (source_message_id,),
-    ).fetchone()
-
-    if row is None:
-        return None
-
-    return json.loads(row[0])
-
 def positive_megabytes(value: str) -> int:
     try:
         number = float(value)
@@ -765,21 +685,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--recursive", action="store_true", help="Find .eml files recursively"
     )
-    output_group = parser.add_mutually_exclusive_group()
-
-    output_group.add_argument(
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=DEFAULT_DB_PATH,
+        help=(
+            "SQLite database for parsed emails "
+            "(default: PROCUREMENT_DB_PATH or ./procurement.db)"
+        ),
+    )
+    parser.add_argument(
+        "--json-only",
+        action="store_true",
+        help="Do not write SQLite; emit/export JSON only (debug/migration mode)",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         type=Path,
-        help="Write a combined JSON export here",
+        help="Optionally export the complete ingestion packet as JSON",
     )
-
-    output_group.add_argument(
-        "--database",
-        type=Path,
-        help="Store one ingestion record per email in this SQLite database",
-    )
-    
     parser.add_argument(
         "--max-email-mb",
         type=positive_megabytes,
@@ -817,58 +742,29 @@ def main(argv: list[str] | None = None) -> int:
         print("error: no .eml files found", file=sys.stderr)
         return 2
 
-    connection = None
-
-    if args.database:
-        args.database.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(args.database)
-        connection.execute("PRAGMA foreign_keys = ON")
-        initialize_database(connection)
-
     records: list[dict[str, Any]] = []
-    inserted = 0
-    duplicates = 0
     failures = 0
-    
-    try:
-        for path in paths:
-            try:
-                record = parse_email_file(
+    for path in paths:
+        try:
+            records.append(
+                parse_email_file(
                     path,
                     sidecar_dir=args.sidecar_dir,
                     max_email_bytes=args.max_email_mb,
                     max_attachment_bytes=args.max_attachment_mb,
                 )
-
-                if connection is not None:
-                    with connection:
-                        was_inserted = save_ingestion_record(connection, record)
-
-                    if was_inserted:
-                        inserted += 1
-                    else:
-                        duplicates += 1
-                else:
-                    records.append(record)
-
-            except Exception as exc:
-                failures += 1
-
-                if args.fail_fast:
-                    raise
-
-                if connection is None:
-                    records.append({
-                        "schema_version": SCHEMA_VERSION,
-                        "source": {
-                            "kind": "email",
-                            "filename": path.name,
-                        },
-                        "error": f"{type(exc).__name__}: {exc}",
-                    })
-    finally:
-        if connection is not None:
-            connection.close()
+            )
+        except Exception as exc:
+            failures += 1
+            if args.fail_fast:
+                raise
+            records.append(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "source": {"kind": "email", "filename": path.name},
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
 
     packet = {
         "schema_version": SCHEMA_VERSION,
@@ -876,16 +772,44 @@ def main(argv: list[str] | None = None) -> int:
         "failure_count": failures,
         "records": records,
     }
-    rendered = json.dumps(
-        packet,
-        ensure_ascii=False,
-        indent=None if args.compact else 2,
-        separators=(",", ":") if args.compact else None,
-    )
-    if args.output:
-        atomic_write_text(args.output, rendered + "\n")
+    if args.json_only:
+        storage_summary = None
     else:
-        sys.stdout.write(rendered + "\n")
+        try:
+            storage_summary = upsert_ingested_records(args.db, records)
+        except StorageError as exc:
+            print(f"error: database persistence failed: {exc}", file=sys.stderr)
+            return 2
+
+    if args.output or args.json_only:
+        rendered = json.dumps(
+            packet,
+            ensure_ascii=False,
+            indent=None if args.compact else 2,
+            separators=(",", ":") if args.compact else None,
+        )
+        if args.output:
+            atomic_write_text(args.output, rendered + "\n")
+        else:
+            sys.stdout.write(rendered + "\n")
+    else:
+        assert storage_summary is not None
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "status": "stored" if not failures else "stored_with_failures",
+                    "parsed_records": len(records) - failures,
+                    "parse_failures": failures,
+                    "database": storage_summary["database"],
+                    "inserted": storage_summary["inserted"],
+                    "updated": storage_summary["updated"],
+                    "skipped": storage_summary["skipped"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n"
+        )
     return 1 if failures else 0
 
 
