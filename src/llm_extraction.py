@@ -10,12 +10,12 @@ Environment variables:
     OPENAI_MODEL      Optional; defaults to gpt-5.5.
 
 Examples:
-    python subproblem3_llm_extraction.py --db procurement.db --list-emails
-    python subproblem3_llm_extraction.py --email-id 1 -o result.json
-    python subproblem3_llm_extraction.py --filename email_01.eml --dry-run
-    python subproblem3_llm_extraction.py --email-id 1 --validate-response candidate.json
-    python subproblem3_llm_extraction.py --input-json parsed.json --record-index 0 --dry-run
-    python subproblem3_llm_extraction.py --print-schema
+    python llm_extraction.py --db procurement.db --list-emails
+    python llm_extraction.py --email-id 1 -o result.json
+    python llm_extraction.py --filename email_01.eml --dry-run
+    python llm_extraction.py --email-id 1 --validate-response candidate.json
+    python llm_extraction.py --input-json parsed.json --record-index 0 --dry-run
+    python llm_extraction.py --print-schema
 
 The --validate-response path makes the "model returned nonsense" behavior easy
 to demonstrate without spending an API call.
