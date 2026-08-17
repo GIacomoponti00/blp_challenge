@@ -1,0 +1,38 @@
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Conda / virtual environments
+.conda/
+.venv/
+venv/
+env/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Runtime databases. Keep only the intentional read-only demo snapshot.
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+!demo/procurements.db
+
+# Generated extraction and pipeline artifacts
+work/
+extractions/
+extraction_*.json
+*.log
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
